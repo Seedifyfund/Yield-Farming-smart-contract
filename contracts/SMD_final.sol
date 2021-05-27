@@ -44,6 +44,33 @@ interface IERC20 {
     );
 }
 
+library SafeERC20 {
+    function safeTransfer(
+        IERC20 token,
+        address to,
+        uint256 value
+    ) internal {
+        require(token.transfer(to, value));
+    }
+
+    function safeTransferFrom(
+        IERC20 token,
+        address from,
+        address to,
+        uint256 value
+    ) internal {
+        require(token.transferFrom(from, to, value));
+    }
+
+    function safeApprove(
+        IERC20 token,
+        address spender,
+        uint256 value
+    ) internal {
+        require(token.approve(spender, value));
+    }
+}
+
 pragma solidity 0.5.16;
 
 library SafeMath {
@@ -157,6 +184,7 @@ pragma solidity 0.5.16;
 
 contract SMD_v5 is Ownable {
     using SafeMath for uint256;
+    using SafeERC20 for IERC20;
 
     address public tokenAddress;
     address public rewardTokenAddress;
@@ -166,7 +194,6 @@ contract SMD_v5 is Ownable {
     uint256 public totalReward;
     uint256 public startingBlock;
     uint256 public endingBlock;
-    uint256 public increaseBlock; //For Local testing purposes only
     uint256 public period;
     uint256 public accShare;
     uint256 public lastRewardBlock;
@@ -219,10 +246,6 @@ contract SMD_v5 is Ownable {
         isPaused = true;
     }
 
-    function incBlock() public {
-        increaseBlock++;
-    } // For Local testing purposes only
-
     /*
         -   To set the start and end blocks for each period
     */
@@ -247,13 +270,12 @@ contract SMD_v5 is Ownable {
         returns (bool)
     {
         // require(_rewardAmount > 0, "Reward must be positive");
-        address from = msg.sender;
-        if (!_payMe(from, _rewardAmount, rewardTokenAddress)) {
+        if (!_payMe(msg.sender, _rewardAmount, rewardTokenAddress)) {
             return false;
         }
 
-        totalReward += _rewardAmount;
-        rewardBalance += _rewardAmount;
+        totalReward = totalReward.add(_rewardAmount);
+        rewardBalance = rewardBalance.add(_rewardAmount);
         return true;
     }
 
@@ -334,6 +356,7 @@ contract SMD_v5 is Ownable {
 
     function stake(uint256 amount)
         external
+        _realAddress(msg.sender)
         _hasAllowance(msg.sender, amount, tokenAddress)
         returns (bool)
     {
@@ -365,8 +388,8 @@ contract SMD_v5 is Ownable {
 
             emit Staked(tokenAddress, from, amount);
 
-            stakedBalance += amount;
-            stakedTotal += amount;
+            stakedBalance = stakedBalance.add(amount);
+            stakedTotal = stakedTotal.add(amount);
             hasStaked[from] = true;
             isPaid[from] = false;
             return true;
@@ -395,8 +418,8 @@ contract SMD_v5 is Ownable {
 
             emit Staked(tokenAddress, from, amount);
 
-            stakedBalance += amount;
-            stakedTotal += amount;
+            stakedBalance = stakedBalance.add(amount);
+            stakedTotal = stakedTotal.add(amount);
             isPaid[from] = false;
             return true;
         }
@@ -423,7 +446,7 @@ contract SMD_v5 is Ownable {
     }
 
     function fetchUserShare(address from) public view returns (uint256) {
-        require(hasStaked[from] == true, "No stakes found for user");
+        require(hasStaked[from], "No stakes found for user");
         if (stakedBalance == 0) {
             return 0;
         }
@@ -451,7 +474,7 @@ contract SMD_v5 is Ownable {
         require(rew <= rewardBalance, "Not enough rewards in the contract");
         deposits[from].userAccShare = accShare;
         deposits[from].latestClaim = block.number;
-        rewardBalance -= rew;
+        rewardBalance = rewardBalance.sub(rew);
         bool payRewards = _payDirect(from, rew, rewardTokenAddress);
         require(payRewards, "Rewards transfer failed");
         emit PaidOut(tokenAddress, rewardTokenAddress, from, amount, rew);
@@ -480,12 +503,11 @@ contract SMD_v5 is Ownable {
         deposits[from].initialStake = block.number;
         deposits[from].latestClaim = block.number;
         deposits[from].userAccShare = accShare;
-        stakedBalance += deposits[from].amount;
+        stakedBalance = stakedBalance.add(deposits[from].amount);
         return true;
     }
 
     function viewOldRewards(address from) public view returns (uint256) {
-        //Local testing purposes only
         require(!isPaused, "Contract paused");
         require(hasStaked[from], "No stakings found, please stake");
 
@@ -498,7 +520,7 @@ contract SMD_v5 is Ownable {
         uint256 accShare1 = endAccShare[userPeriod].accShare;
         uint256 userAccShare = deposits[from].userAccShare;
 
-        if (deposits[from].latestClaim > endAccShare[userPeriod].endingBlock)
+        if (deposits[from].latestClaim >= endAccShare[userPeriod].endingBlock)
             return 0;
         uint256 amount = deposits[from].amount;
         uint256 rewDebt = amount.mul(userAccShare).div(1e6);
@@ -530,7 +552,7 @@ contract SMD_v5 is Ownable {
 
         require(rew <= rewardBalance, "Not enough rewards");
         deposits[from].latestClaim = endAccShare[userPeriod].endingBlock;
-        rewardBalance -= rew;
+        rewardBalance = rewardBalance.sub(rew);
         bool paidOldRewards = _payDirect(from, rew, rewardTokenAddress);
         require(paidOldRewards, "Error paying");
         emit PaidOut(tokenAddress, rewardTokenAddress, from, amount, rew);
@@ -571,11 +593,14 @@ contract SMD_v5 is Ownable {
         return (rew);
     }
 
-    function emergencyWithdraw() external returns (bool) {
-        address from = msg.sender;
-        require(hasStaked[from] == true, "No stakes available for user");
-        require(isPaid[from] == false, "Already Paid");
-        return (_withdraw(from));
+    function emergencyWithdraw()
+        external
+        _realAddress(msg.sender)
+        returns (bool)
+    {
+        require(hasStaked[msg.sender], "No stakes available for user");
+        require(!isPaid[msg.sender], "Already Paid");
+        return (_withdraw(msg.sender));
     }
 
     function _withdraw(address from) private returns (bool) {
@@ -587,33 +612,25 @@ contract SMD_v5 is Ownable {
         isPaid[from] = true;
         hasStaked[from] = false;
         bool paid = _payDirect(from, amount, tokenAddress);
-        require(paid, "Error");
+        require(paid, "Error during withdraw");
         delete deposits[from];
         return true;
     }
 
-    function withdraw() external returns (bool) {
-        address from = msg.sender;
-
-        if (deposits[from].currentPeriod == period) {
-            if (calculate(from) > 0) {
+    function withdraw() external _realAddress(msg.sender) returns (bool) {
+        if (deposits[msg.sender].currentPeriod == period) {
+            if (calculate(msg.sender) > 0) {
                 bool rewardsPaid = claimRewards();
                 require(rewardsPaid, "Error paying rewards");
             }
         }
 
-        if (viewOldRewards(from) > 0) {
+        if (viewOldRewards(msg.sender) > 0) {
             bool oldRewardsPaid = claimOldRewards();
             require(oldRewardsPaid, "Error paying old rewards");
         }
-        _withdraw(from);
+        _withdraw(msg.sender);
     }
-
-    // function removeRewards() public returns (bool) {
-    //     require(rewardBalance > 0, "No rewards in the pool");
-    //     _payDirect(msg.sender, rewardBalance, rewardTokenAddress);
-    //     rewardBalance = 0;
-    // }  - For Local testing purpose only
 
     function currentBlock() public view returns (uint256) {
         return (block.number);
@@ -637,7 +654,8 @@ contract SMD_v5 is Ownable {
         // contract does not own the funds, so the allower must have added allowance to the contract
         // Allower is the original owner.
         ERC20Interface = IERC20(token);
-        return ERC20Interface.transferFrom(allower, receiver, amount);
+        ERC20Interface.safeTransferFrom(allower, receiver, amount);
+        return true;
     }
 
     function _payDirect(
@@ -645,8 +663,18 @@ contract SMD_v5 is Ownable {
         uint256 amount,
         address token
     ) private returns (bool) {
+        require(
+            token == tokenAddress || token == rewardTokenAddress,
+            "Invalid token address"
+        );
         ERC20Interface = IERC20(token);
-        return ERC20Interface.transfer(to, amount);
+        ERC20Interface.safeTransfer(to, amount);
+        return true;
+    }
+
+    modifier _realAddress(address addr) {
+        require(addr != address(0), "Zero address");
+        _;
     }
 
     modifier _hasAllowance(
@@ -655,6 +683,10 @@ contract SMD_v5 is Ownable {
         address token
     ) {
         // Make sure the allower has provided the right allowance.
+        require(
+            token == tokenAddress || token == rewardTokenAddress,
+            "Invalid token address"
+        );
         ERC20Interface = IERC20(token);
         uint256 ourAllowance = ERC20Interface.allowance(allower, address(this));
         require(amount <= ourAllowance, "Make sure to add enough allowance");
