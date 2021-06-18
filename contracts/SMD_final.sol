@@ -366,8 +366,7 @@ contract SMD_v5 is Ownable {
             "Invalid period"
         );
         require(amount > 0, "Can't stake 0 amount");
-        address from = msg.sender;
-        return (_stake(from, amount));
+        return (_stake(msg.sender, amount));
     }
 
     function _stake(address from, uint256 amount) private returns (bool) {
@@ -482,15 +481,17 @@ contract SMD_v5 is Ownable {
     }
 
     function renew() public returns (bool) {
-        address from = msg.sender;
         require(!isPaused, "Contract paused");
-        require(hasStaked[from], "No stakings found, please stake");
-        require(deposits[from].currentPeriod != period, "Already renewed");
+        require(hasStaked[msg.sender], "No stakings found, please stake");
+        require(
+            deposits[msg.sender].currentPeriod != period,
+            "Already renewed"
+        );
         require(
             block.number > startingBlock && block.number < endingBlock,
             "Wrong time"
         );
-        return (_renew(from));
+        return (_renew(msg.sender));
     }
 
     function _renew(address from) private returns (bool) {
@@ -532,30 +533,33 @@ contract SMD_v5 is Ownable {
     }
 
     function claimOldRewards() public returns (bool) {
-        address from = msg.sender;
         require(!isPaused, "Contract paused");
-        require(hasStaked[from], "No stakings found, please stake");
-        require(deposits[from].currentPeriod != period, "Already renewed");
+        require(hasStaked[msg.sender], "No stakings found, please stake");
+        require(
+            deposits[msg.sender].currentPeriod != period,
+            "Already renewed"
+        );
 
-        uint256 userPeriod = deposits[from].currentPeriod;
+        uint256 userPeriod = deposits[msg.sender].currentPeriod;
 
         uint256 accShare1 = endAccShare[userPeriod].accShare;
-        uint256 userAccShare = deposits[from].userAccShare;
+        uint256 userAccShare = deposits[msg.sender].userAccShare;
 
         require(
-            deposits[from].latestClaim < endAccShare[userPeriod].endingBlock,
+            deposits[msg.sender].latestClaim <
+                endAccShare[userPeriod].endingBlock,
             "Already claimed old rewards"
         );
-        uint256 amount = deposits[from].amount;
+        uint256 amount = deposits[msg.sender].amount;
         uint256 rewDebt = amount.mul(userAccShare).div(1e6);
         uint256 rew = (amount.mul(accShare1).div(1e6)).sub(rewDebt);
 
         require(rew <= rewardBalance, "Not enough rewards");
-        deposits[from].latestClaim = endAccShare[userPeriod].endingBlock;
+        deposits[msg.sender].latestClaim = endAccShare[userPeriod].endingBlock;
         rewardBalance = rewardBalance.sub(rew);
-        bool paidOldRewards = _payDirect(from, rew, rewardTokenAddress);
+        bool paidOldRewards = _payDirect(msg.sender, rew, rewardTokenAddress);
         require(paidOldRewards, "Error paying");
-        emit PaidOut(tokenAddress, rewardTokenAddress, from, amount, rew);
+        emit PaidOut(tokenAddress, rewardTokenAddress, msg.sender, amount, rew);
         return true;
     }
 
@@ -629,7 +633,7 @@ contract SMD_v5 is Ownable {
             bool oldRewardsPaid = claimOldRewards();
             require(oldRewardsPaid, "Error paying old rewards");
         }
-        _withdraw(msg.sender);
+        return (_withdraw(msg.sender));
     }
 
     function currentBlock() public view returns (uint256) {
